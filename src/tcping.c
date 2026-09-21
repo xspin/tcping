@@ -1,31 +1,75 @@
-#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <memory.h>
-#include <netdb.h>
-#include <netinet/in.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include "getopt.h"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#include <windows.h>
+
+#pragma comment(lib, "ws2_32.lib") // MSVC
+
+#define close(fd) closesocket(fd)
+
+typedef int socklen_t;
+
+#ifndef _SA_FAMILY_T_DEFINED
+typedef unsigned short family_t;
+#endif
+
+#ifndef _IN_PORT_T_DEFINED
+typedef uint16_t port_t;
+#define _IN_PORT_T_DEFINED
+#endif
+
+#ifndef _IN_ADDR_T_DEFINED
+typedef uint32_t addr_t;
+#define _IN_ADDR_T_DEFINED
+#endif
+
+static inline int set_nonblocking(int fd, int enable) {
+    u_long mode = enable ? 1 : 0;
+    return ioctlsocket(fd, FIONBIO, &mode);
+}
+
+#define usleep(x) Sleep((x) / 1000)
+
+#else
+
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
-#include <time.h>
 #include <unistd.h>
-
-#ifndef APP_VERSION
-#define APP_VERSION "unknown"
-#endif
 
 typedef sa_family_t family_t;
 typedef in_port_t port_t;
 
-typedef struct addr_s {
-    family_t family;
-    port_t port;
-    char ip[INET6_ADDRSTRLEN];
-} addr_t;
+static inline int set_nonblocking(int fd, int enable) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0)
+        return -1;
+    if (enable)
+        flags |= O_NONBLOCK;
+    else
+        flags &= ~O_NONBLOCK;
+    return fcntl(fd, F_SETFL, flags);
+}
+#endif
+
+#ifndef APP_VERSION
+#define APP_VERSION "unknown"
+#endif
 
 static char errmsg[1024];
 
@@ -109,20 +153,17 @@ static const char *ntop(const struct sockaddr *addr, port_t *port) {
 
 static int connect_with_timeout(int fd, const struct sockaddr *addr,
                                 socklen_t addrlen, int timeout_sec) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0)
+    if (set_nonblocking(fd, 1) < 0) {
         return -1;
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-        return -1;
+    }
 
     int ret = connect(fd, addr, addrlen);
     if (ret == 0) {
-        fcntl(fd, F_SETFL, flags);
+        set_nonblocking(fd, 0);
         return 0;
     }
     if (errno != EINPROGRESS) {
-        fcntl(fd, F_SETFL, flags);
-        return -1;
+        goto failed;
     }
 
     fd_set wfds;
@@ -136,28 +177,28 @@ static int connect_with_timeout(int fd, const struct sockaddr *addr,
     ret = select(fd + 1, NULL, &wfds, NULL, &tv);
     if (ret == 0) {
         errno = ETIMEDOUT;
-        fcntl(fd, F_SETFL, flags);
-        return -1;
+        goto failed;
     }
     if (ret < 0) {
-        fcntl(fd, F_SETFL, flags);
-        return -1;
+        goto failed;
     }
 
     int err = 0;
     socklen_t len = sizeof(err);
-    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) < 0) {
-        fcntl(fd, F_SETFL, flags);
-        return -1;
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&err, &len) < 0) {
+        goto failed;
     }
     if (err != 0) {
         errno = err;
-        fcntl(fd, F_SETFL, flags);
-        return -1;
+        goto failed;
     }
 
-    fcntl(fd, F_SETFL, flags);
+    set_nonblocking(fd, 0);
     return 0;
+
+failed:
+    set_nonblocking(fd, 0);
+    return -1;
 }
 
 static int tcp_connect(const struct sockaddr *addr, int timeout) {

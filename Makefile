@@ -1,6 +1,6 @@
 # ===== Project configuration =====
 APP        := tcping
-SRCS       := $(wildcard *.c)
+SRCS       := $(wildcard src/*.c)
 OBJS       := $(SRCS:.c=.o)
 DEPS       := $(OBJS:.o=.d)
 
@@ -8,11 +8,7 @@ VERSION    ?= 0.0.1
 
 # Install prefix, override via: make install PREFIX=/usr/local
 PREFIX     ?= /usr/local
-BINDIR     := $(PREFIX)/bin
 
-# ===== Toolchain =====
-CC         := gcc
-INSTALL    := install
 
 # ===== Common flags =====
 CFLAGS     := -Wall -Wextra -std=c11
@@ -20,9 +16,40 @@ CPPFLAGS   := -DAPP_VERSION=\"$(VERSION)\"
 LDFLAGS    :=
 LDLIBS     :=
 
+# ===== Target platform =====
+# native: build for the host (default)
+# mingw:  cross-compile for Windows using MinGW-w64
+TARGET     ?= native
+
+GETOPT_DIR ?= third_party/getopt
+
+ifeq ($(TARGET),native)
+  CC         := gcc
+  EXEEXT     :=
+  INSTALL    := install
+else ifeq ($(TARGET),mingw)
+  # Use the 64-bit toolchain. For 32-bit use i686-w64-mingw32-gcc.
+  CC         := x86_64-w64-mingw32-gcc
+  AR         := x86_64-w64-mingw32-ar
+  EXEEXT     := .exe
+  INSTALL    := cp
+  # MinGW does not have /usr/local by default; use a local dist directory
+  PREFIX     ?= dist/windows
+  # Static linking avoids shipping libgcc/libwinpthread DLLs
+  LDFLAGS    += -static
+  CFLAGS 	 += -D_WIN32=1
+  CPPFLAGS   += -I$(GETOPT_DIR)
+  SRCS       += $(GETOPT_DIR)/getopt.c $(GETOPT_DIR)/getopt1.c
+  LDLIBS     += -lws2_32
+else
+  $(error TARGET must be native or mingw, got: $(TARGET))
+endif
+
+BINDIR     := $(PREFIX)/bin
+
 # ===== Build mode =====
-# Default is release. Switch via: make BUILD=release
-BUILD      ?= release
+# Default is debug. Switch via: make BUILD=release
+BUILD      ?= debug
 
 ifeq ($(BUILD),debug)
   CFLAGS   += -g -O0 -DDEBUG
@@ -32,12 +59,15 @@ else
   $(error BUILD must be debug or release, got: $(BUILD))
 endif
 
+BIN        := $(APP)$(EXEEXT)
+
 # ===== Targets =====
 .PHONY: all clean install uninstall debug release help
 
-all: $(APP)
 
-$(APP): $(OBJS)
+all: $(BIN)
+
+$(BIN): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # Auto-generate dependency files (.d) to track header changes
@@ -53,20 +83,25 @@ debug:
 release:
 	$(MAKE) BUILD=release
 
-install: $(APP)
+# Cross-compile for Windows, release build
+mingw:
+	$(MAKE) TARGET=mingw BUILD=release
+
+install: $(BIN)
 	$(INSTALL) -d $(DESTDIR)$(BINDIR)
-	$(INSTALL) -m 755 $(APP) $(DESTDIR)$(BINDIR)/$(APP)
+	$(INSTALL) -m 755 $(BIN) $(DESTDIR)$(BINDIR)/$(BIN)
 
 uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/$(APP)
+	rm -f $(DESTDIR)$(BINDIR)/$(BIN)
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(APP)
+	rm -f $(OBJS) $(DEPS) $(BIN) $(APP).exe
 
 help:
 	@echo "Usage:"
-	@echo "  make               # release build (default)"
+	@echo "  make               # debug build (default)"
 	@echo "  make BUILD=release # release build"
+	@echo "  make mingw         # cross-compile, same as TARGET=mingw BUILD=release"
 	@echo "  make debug         # same as BUILD=debug"
 	@echo "  make release       # same as BUILD=release"
 	@echo "  make install       # install to PREFIX/bin"
