@@ -47,6 +47,16 @@ ifeq ($(PLATFORM),windows)
   LDFLAGS    += -static
 endif
 
+# macOS architecture support
+ARCH ?=
+
+ifeq ($(PLATFORM),macos)
+  ifneq ($(ARCH),)
+    CFLAGS  += -arch $(ARCH)
+    LDFLAGS += -arch $(ARCH)
+  endif
+endif
+
 # ===== Target platform =====
 # native: build for the host (default)
 # mingw:  cross-compile for Windows using MinGW-w64

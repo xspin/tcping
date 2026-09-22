@@ -1,0 +1,104 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: tcping-linux-x86_64
+          - os: macos-14
+            artifact: tcping-macos-universal
+          - os: windows-latest
+            artifact: tcping-windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Install MinGW (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install mingw -y
+          echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $GITHUB_PATH
+        shell: bash
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: make BUILD=release VERSION=${{ github.ref_name }}
+
+      - name: Build (macOS universal)
+        if: runner.os == 'macOS'
+        run: |
+          make clean
+          make BUILD=release VERSION=${{ github.ref_name }} ARCH=arm64
+          mv tcping tcping-arm64
+          make clean
+          make BUILD=release VERSION=${{ github.ref_name }} ARCH=x86_64
+          mv tcping tcping-x86_64
+          lipo -create -output tcping tcping-arm64 tcping-x86_64
+          lipo -info tcping
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: make TARGET=mingw BUILD=release VERSION=${{ github.ref_name }}
+        shell: bash
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp tcping dist/
+          cp README.md LICENSE dist/ 2>/dev/null || true
+          cd dist && tar czf ../${{ matrix.artifact }}.tar.gz *
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist
+          cp tcping.exe dist/
+          cp README.md LICENSE dist/ 2>/dev/null || true
+          cd dist && 7z a ../${{ matrix.artifact }}.zip *
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+          if-no-files-found: ignore
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
