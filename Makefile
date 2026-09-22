@@ -45,6 +45,9 @@ DEPS       := $(OBJS:.o=.d)
 ifeq ($(PLATFORM),windows)
   LDLIBS     += -lws2_32
   LDFLAGS    += -static
+else ifeq ($(PLATFORM),linux)
+	# CPPFLAGS += -D_POSIX_C_SOURCE=200809L
+	CPPFLAGS += -D_GNU_SOURCE=1
 endif
 
 # macOS architecture support
