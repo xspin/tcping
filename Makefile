@@ -5,6 +5,8 @@ VERSION    ?= 0.0.1
 
 GETOPT_DIR ?= third_party/getopt
 
+GIT_REV := $(shell git rev-parse --short HEAD)
+
 # ===== Detect host OS =====
 UNAME_S := $(shell uname -s)
 
@@ -26,7 +28,7 @@ PREFIX     ?= /usr/local
 
 # ===== Common flags =====
 CFLAGS     := -Wall -Wextra -std=c11
-CPPFLAGS   := -DAPP_VERSION=\"$(VERSION)\"
+CPPFLAGS   := -DAPP_VERSION=\"$(VERSION)\" -DGIT_REV=\"$(GIT_REV)\"
 LDFLAGS    :=
 LDLIBS     :=
 

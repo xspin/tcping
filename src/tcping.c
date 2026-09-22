@@ -71,6 +71,10 @@ static inline int set_nonblocking(int fd, int enable) {
 #define APP_VERSION "unknown"
 #endif
 
+#ifndef GIT_REV
+#define GIT_REV "unknown"
+#endif
+
 static char errmsg[1024];
 
 static volatile sig_atomic_t stop = 0;
@@ -271,7 +275,7 @@ static void usage() {
     fprintf(
         stderr,
         "Usage: %s [-46hv] [-t timeout] host [port]\n"
-        "Version %s\n"
+        "Version %s (rev %s)\n"
         "Positional arguments:\n"
         "  host             IP address or domain\n"
         "  port             specify the TCP port (default 80)\n"
@@ -280,10 +284,10 @@ static void usage() {
         "  -4               force for IPv4\n"
         "  -c count         stop after count pings\n"
         "  -t timeout       specify timeout in seconds (default 3 seconds)\n"
-        "  -w waittime      Time in milliseconds to wait (default 1 second)\n"
+        "  -w waittime      time in milliseconds to wait (default 1 second)\n"
         "  -v               show version info\n"
         "  -h               show this helpful usage\n",
-        prog, APP_VERSION);
+        prog, APP_VERSION, GIT_REV);
 }
 
 int main(int argc, char *argv[]) {
@@ -337,7 +341,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
     if (show_version) {
-        printf("%s\n", APP_VERSION);
+        printf("%s (rev %s)\n", APP_VERSION, GIT_REV);
         return 0;
     }
 
