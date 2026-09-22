@@ -10,6 +10,7 @@ on platforms that lack a POSIX implementation (notably MinGW).
   - `libiberty/getopt.c`
   - `libiberty/getopt1.c`
   - `include/getopt.h`
+  - `include/ansidecl.h`
 
 ## License
 

@@ -80,6 +80,18 @@ static void handle_sigint(int sig) {
     stop = 1;
 }
 
+static inline const char *error() {
+#ifdef _WIN32
+    static char buf[256];
+    int err = WSAGetLastError();
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                   NULL, err, 0, buf, sizeof(buf), NULL);
+    return buf;
+#else
+    return strerror(errno);
+#endif
+}
+
 static const struct sockaddr *get_addr(const char *domain, port_t port,
                                        family_t family) {
     static struct sockaddr_storage addr;
@@ -144,7 +156,7 @@ static const char *ntop(const struct sockaddr *addr, port_t *port) {
     }
 
     if (ret == NULL) {
-        snprintf(errmsg, sizeof(errmsg), "inet_ntop: %s", strerror(errno));
+        snprintf(errmsg, sizeof(errmsg), "inet_ntop: %s", error());
         return NULL;
     }
 
@@ -162,9 +174,15 @@ static int connect_with_timeout(int fd, const struct sockaddr *addr,
         set_nonblocking(fd, 0);
         return 0;
     }
+#ifdef _WIN32
+    if (WSAGetLastError() != WSAEWOULDBLOCK) {
+        goto failed;
+    }
+#else
     if (errno != EINPROGRESS) {
         goto failed;
     }
+#endif
 
     fd_set wfds;
     FD_ZERO(&wfds);
@@ -176,7 +194,11 @@ static int connect_with_timeout(int fd, const struct sockaddr *addr,
 
     ret = select(fd + 1, NULL, &wfds, NULL, &tv);
     if (ret == 0) {
+#ifdef _WIN32
+        WSASetLastError(WSAETIMEDOUT);
+#else
         errno = ETIMEDOUT;
+#endif
         goto failed;
     }
     if (ret < 0) {
@@ -204,7 +226,7 @@ failed:
 static int tcp_connect(const struct sockaddr *addr, int timeout) {
     int fd = socket(addr->sa_family, SOCK_STREAM, 0);
     if (fd < 0) {
-        snprintf(errmsg, sizeof(errmsg), "socket: %s", strerror(errno));
+        snprintf(errmsg, sizeof(errmsg), "socket: %s", error());
         return -1;
     }
 
@@ -213,7 +235,7 @@ static int tcp_connect(const struct sockaddr *addr, int timeout) {
 
     // if (connect(fd, addr, len) < 0) {
     if (connect_with_timeout(fd, addr, len, timeout)) {
-        snprintf(errmsg, sizeof(errmsg), "connect: %s", strerror(errno));
+        snprintf(errmsg, sizeof(errmsg), "connect: %s", error());
         close(fd);
         return -1;
     }
@@ -265,6 +287,10 @@ static void usage() {
 }
 
 int main(int argc, char *argv[]) {
+#ifdef _WIN32
+    setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+
     signal(SIGINT, handle_sigint);
 
     family_t family = AF_UNSPEC;
@@ -327,6 +353,15 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
+#ifdef _WIN32
+    WSADATA wsa;
+    int err = WSAStartup(MAKEWORD(2, 2), &wsa);
+    if (err != 0) {
+        fprintf(stderr, "WSAStartup failed: %d\n", err);
+        return 1;
+    }
+#endif
+
     const char *host = argv[optind];
     const char *port_str = (remaining == 2) ? argv[optind + 1] : "80";
     port_t port = atoi(port_str);
@@ -341,6 +376,9 @@ int main(int argc, char *argv[]) {
     const struct sockaddr *addr = get_addr(host, port, family);
     if (!addr) {
         fprintf(stderr, "cannot resolve %s: %s\n", host, errmsg);
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return -1;
     }
 
@@ -385,5 +423,8 @@ int main(int argc, char *argv[]) {
                mean, max, sd);
     }
 
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 0;
 }

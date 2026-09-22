@@ -1,10 +1,24 @@
 # ===== Project configuration =====
 APP        := tcping
-SRCS       := $(wildcard src/*.c)
-OBJS       := $(SRCS:.c=.o)
-DEPS       := $(OBJS:.o=.d)
 
 VERSION    ?= 0.0.1
+
+GETOPT_DIR ?= third_party/getopt
+
+# ===== Detect host OS =====
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+  PLATFORM := macos
+else ifeq ($(UNAME_S),Linux)
+  PLATFORM := linux
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+  PLATFORM := windows
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+  PLATFORM := windows
+else
+  PLATFORM := unknown
+endif
 
 # Install prefix, override via: make install PREFIX=/usr/local
 PREFIX     ?= /usr/local
@@ -16,12 +30,25 @@ CPPFLAGS   := -DAPP_VERSION=\"$(VERSION)\"
 LDFLAGS    :=
 LDLIBS     :=
 
+
+ifneq (,$(filter windows macos,$(PLATFORM)))
+  SRCS     := $(GETOPT_DIR)/getopt.c $(GETOPT_DIR)/getopt1.c
+  CPPFLAGS += -I$(GETOPT_DIR)
+endif
+
+SRCS       += $(wildcard src/*.c)
+OBJS       := $(SRCS:.c=.o)
+DEPS       := $(OBJS:.o=.d)
+
+ifeq ($(PLATFORM),windows)
+  LDLIBS     += -lws2_32
+  LDFLAGS    += -static
+endif
+
 # ===== Target platform =====
 # native: build for the host (default)
 # mingw:  cross-compile for Windows using MinGW-w64
 TARGET     ?= native
-
-GETOPT_DIR ?= third_party/getopt
 
 ifeq ($(TARGET),native)
   CC         := gcc
@@ -38,8 +65,6 @@ else ifeq ($(TARGET),mingw)
   # Static linking avoids shipping libgcc/libwinpthread DLLs
   LDFLAGS    += -static
   CFLAGS 	 += -D_WIN32=1
-  CPPFLAGS   += -I$(GETOPT_DIR)
-  SRCS       += $(GETOPT_DIR)/getopt.c $(GETOPT_DIR)/getopt1.c
   LDLIBS     += -lws2_32
 else
   $(error TARGET must be native or mingw, got: $(TARGET))
