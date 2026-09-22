@@ -67,6 +67,8 @@ static inline int set_nonblocking(int fd, int enable) {
 }
 #endif
 
+#define APP_NAME "tcping"
+
 #ifndef APP_VERSION
 #define APP_VERSION "unknown"
 #endif
@@ -75,7 +77,17 @@ static inline int set_nonblocking(int fd, int enable) {
 #define GIT_REV "unknown"
 #endif
 
+static volatile int s_dbg = 0;
+
+#define dbg(fmt, args...)                                                      \
+    do {                                                                       \
+        if (s_dbg)                                                             \
+            fprintf(stderr, "[DBG] " fmt "\n", ##args);                        \
+    } while (0)
+
 static char errmsg[1024];
+
+#define set_errmsg(fmt, args...) snprintf(errmsg, sizeof(errmsg), fmt, ##args)
 
 static volatile sig_atomic_t stop = 0;
 
@@ -109,12 +121,27 @@ static const struct sockaddr *get_addr(const char *domain, port_t port,
     sprintf(buf, "%d", port);
     int ret = getaddrinfo(domain, buf, &hints, &res);
     if (ret != 0) {
-        snprintf(errmsg, sizeof(errmsg), "getaddrinfo: %s", gai_strerror(ret));
+        set_errmsg("getaddrinfo: %s", gai_strerror(ret));
         return NULL;
     }
 
     memset(&addr, 0, sizeof(addr));
     memcpy(&addr, res->ai_addr, res->ai_addrlen);
+
+    dbg("Resolve: %s", domain);
+    struct addrinfo *p;
+    for (p = res; p != NULL; p = p->ai_next) {
+        char ip[INET6_ADDRSTRLEN];
+        if (p->ai_family == AF_INET) {
+            struct sockaddr_in *a4 = (struct sockaddr_in *)p->ai_addr;
+            inet_ntop(AF_INET, &a4->sin_addr, ip, sizeof(ip));
+            dbg("IPv4: %s", ip);
+        } else if (p->ai_family == AF_INET6) {
+            struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)p->ai_addr;
+            inet_ntop(AF_INET6, &a6->sin6_addr, ip, sizeof(ip));
+            dbg("IPv6: %s", ip);
+        }
+    }
 
     freeaddrinfo(res);
 
@@ -160,7 +187,7 @@ static const char *ntop(const struct sockaddr *addr, port_t *port) {
     }
 
     if (ret == NULL) {
-        snprintf(errmsg, sizeof(errmsg), "inet_ntop: %s", error());
+        set_errmsg("inet_ntop: %s", error());
         return NULL;
     }
 
@@ -216,6 +243,11 @@ static int connect_with_timeout(int fd, const struct sockaddr *addr,
     }
     if (err != 0) {
         errno = err;
+#ifdef _WIN32
+        WSASetLastError(err);
+#else
+        errno = err;
+#endif
         goto failed;
     }
 
@@ -230,16 +262,15 @@ failed:
 static int tcp_connect(const struct sockaddr *addr, int timeout) {
     int fd = socket(addr->sa_family, SOCK_STREAM, 0);
     if (fd < 0) {
-        snprintf(errmsg, sizeof(errmsg), "socket: %s", error());
+        set_errmsg("socket: %s", error());
         return -1;
     }
 
     socklen_t len = addr->sa_family == AF_INET ? sizeof(struct sockaddr_in)
                                                : sizeof(struct sockaddr_in6);
 
-    // if (connect(fd, addr, len) < 0) {
     if (connect_with_timeout(fd, addr, len, timeout)) {
-        snprintf(errmsg, sizeof(errmsg), "connect: %s", error());
+        set_errmsg("connect: %s", error());
         close(fd);
         return -1;
     }
@@ -270,12 +301,11 @@ static double ping_once(const struct sockaddr *addr, int timeout) {
     return elapsed;
 }
 
-static void usage() {
-    const char *prog = "tcping";
+static void usage(FILE *s) {
     fprintf(
-        stderr,
+        s,
+        "%s %s (rev %s)\n"
         "Usage: %s [-46hv] [-t timeout] host [port]\n"
-        "Version %s (rev %s)\n"
         "Positional arguments:\n"
         "  host             IP address or hostname\n"
         "  port             TCP port (default 80)\n"
@@ -286,9 +316,10 @@ static void usage() {
         "  -t timeout       specify timeout in seconds (default 3 seconds)\n"
         "  -w waittime      time in milliseconds to wait for each reply "
         "(default 1 second)\n"
+        "  -d               print verbose messages\n"
         "  -v               show version info\n"
         "  -h               show this helpful usage\n",
-        prog, APP_VERSION, GIT_REV);
+        APP_NAME, APP_VERSION, GIT_REV, APP_NAME);
 }
 
 int main(int argc, char *argv[]) {
@@ -306,9 +337,11 @@ int main(int argc, char *argv[]) {
     int count = INT_MAX;
     int opt;
 
-    sprintf(errmsg, "unknown error");
+    dbg("%s %s (rev %s)", APP_NAME, APP_VERSION, GIT_REV);
 
-    while ((opt = getopt(argc, argv, "46hvt:w:c:")) != -1) {
+    set_errmsg("unknown error");
+
+    while ((opt = getopt(argc, argv, "46hvdt:w:c:")) != -1) {
         switch (opt) {
         case '6':
             family = AF_INET6;
@@ -322,6 +355,9 @@ int main(int argc, char *argv[]) {
         case 'v':
             show_version = 1;
             break;
+        case 'd':
+            s_dbg = 1;
+            break;
         case 't':
             timeout = atoi(optarg);
             break;
@@ -332,29 +368,29 @@ int main(int argc, char *argv[]) {
             count = atoi(optarg);
             break;
         default: // '?'
-            usage();
+            usage(stderr);
             return 1;
         }
     }
 
     if (show_help) {
-        usage();
+        usage(stdout);
         return 0;
     }
     if (show_version) {
-        printf("%s (rev %s)\n", APP_VERSION, GIT_REV);
+        printf("%s %s (rev %s)\n", APP_NAME, APP_VERSION, GIT_REV);
         return 0;
     }
 
     int remaining = argc - optind;
     if (remaining < 1) {
-        printf("host is not specified\n");
-        usage();
+        fprintf(stderr, "host is not specified\n");
+        usage(stderr);
         return -1;
     }
     if (remaining > 2) {
-        printf("unknown arg: %s\n", argv[optind + 2]);
-        usage();
+        fprintf(stderr, "unknown arg: %s\n", argv[optind + 2]);
+        usage(stderr);
         return -1;
     }
 
@@ -370,6 +406,9 @@ int main(int argc, char *argv[]) {
     const char *host = argv[optind];
     const char *port_str = (remaining == 2) ? argv[optind + 1] : "80";
     port_t port = atoi(port_str);
+
+    dbg("host: %s, port: %d, timeout: %d s, waittime: %d ms, count: %d", host,
+        port, timeout, waittime, count);
 
     int seq = 0;
     double min = 1e9;
@@ -424,7 +463,7 @@ int main(int argc, char *argv[]) {
     printf("%d packets transmitted, %d packets received, %.2f%% packet loss\n",
            seq, succ, 100.0 * (seq - succ) / seq);
     if (succ > 0) {
-        printf("round-trip min/avg/max/stddev: %.3f/%.3f/%.3f/%.3f\n", min,
+        printf("round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f\n", min,
                mean, max, sd);
     }
 

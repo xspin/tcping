@@ -41,25 +41,37 @@ jobs:
           echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $GITHUB_PATH
         shell: bash
 
+      - name: Compute version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Debug version
+        run: |
+          echo "ref_name   = $GITHUB_REF_NAME"
+          echo "version    = ${GITHUB_REF_NAME#v}"
+          echo "VERSION    = $VERSION"
+        shell: bash
+
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: make BUILD=release VERSION=${{ github.ref_name }}
+        run: make BUILD=release VERSION=$VERSION
 
       - name: Build (macOS universal)
         if: runner.os == 'macOS'
         run: |
           make clean
-          make BUILD=release VERSION=${{ github.ref_name }} ARCH=arm64
+          make BUILD=release VERSION=$VERSION ARCH=arm64
           mv tcping tcping-arm64
           make clean
-          make BUILD=release VERSION=${{ github.ref_name }} ARCH=x86_64
+          make BUILD=release VERSION=$VERSION ARCH=x86_64
           mv tcping tcping-x86_64
           lipo -create -output tcping tcping-arm64 tcping-x86_64
           lipo -info tcping
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: make TARGET=mingw BUILD=release VERSION=${{ github.ref_name }}
+        run: make TARGET=mingw BUILD=release VERSION=$VERSION
         shell: bash
 
       - name: Package (Linux/macOS)
