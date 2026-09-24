@@ -1,6 +1,14 @@
 # tcping
+
 A terminal tool to ping a TCP port.
 
+[Project Home Page](https://github.com/xspin/tcping)
+
+## Usage
+
+```
+Usage: tcping [-46hvd] [-t timeout] [-w waittime] [-c count] host [port]
+```
 
 The next is an example to ping a TCP.
 

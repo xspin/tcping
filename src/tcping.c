@@ -89,11 +89,11 @@ static char errmsg[1024];
 
 #define set_errmsg(fmt, args...) snprintf(errmsg, sizeof(errmsg), fmt, ##args)
 
-static volatile sig_atomic_t stop = 0;
+static volatile sig_atomic_t s_stop = 0;
 
 static void handle_sigint(int sig) {
     (void)sig;
-    stop = 1;
+    s_stop = 1;
 }
 
 static inline const char *error() {
@@ -195,14 +195,14 @@ static const char *ntop(const struct sockaddr *addr, port_t *port) {
 }
 
 static int connect_with_timeout(int fd, const struct sockaddr *addr,
-                                socklen_t addrlen, int timeout_sec) {
+                                socklen_t addrlen, int timeout_ms) {
     if (set_nonblocking(fd, 1) < 0) {
         return -1;
     }
 
     int ret = connect(fd, addr, addrlen);
     if (ret == 0) {
-        set_nonblocking(fd, 0);
+        // set_nonblocking(fd, 0);
         return 0;
     }
 #ifdef _WIN32
@@ -220,8 +220,8 @@ static int connect_with_timeout(int fd, const struct sockaddr *addr,
     FD_SET(fd, &wfds);
 
     struct timeval tv;
-    tv.tv_sec = timeout_sec;
-    tv.tv_usec = 0;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
 
     ret = select(fd + 1, NULL, &wfds, NULL, &tv);
     if (ret == 0) {
@@ -251,11 +251,11 @@ static int connect_with_timeout(int fd, const struct sockaddr *addr,
         goto failed;
     }
 
-    set_nonblocking(fd, 0);
+    // set_nonblocking(fd, 0);
     return 0;
 
 failed:
-    set_nonblocking(fd, 0);
+    // set_nonblocking(fd, 0);
     return -1;
 }
 
@@ -288,13 +288,14 @@ static double ping_once(const struct sockaddr *addr, int timeout) {
     clock_gettime(CLOCK_MONOTONIC, &start);
 
     int fd = tcp_connect(addr, timeout);
-    if (fd < 0) {
-        return -1;
-    }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
     double elapsed = (end.tv_sec - start.tv_sec) * 1e3 +
                      (end.tv_nsec - start.tv_nsec) / 1e6; // milliseconds
+    if (fd < 0) {
+        dbg("elased: %.3f ms", elapsed);
+        return -1;
+    }
 
     close(fd);
 
@@ -305,7 +306,7 @@ static void usage(FILE *s) {
     fprintf(
         s,
         "%s %s (rev %s)\n"
-        "Usage: %s [-46hv] [-t timeout] host [port]\n"
+        "Usage: %s [-46hvd] [-t timeout] [-w waittime] [-c count] host [port]\n"
         "Positional arguments:\n"
         "  host             IP address or hostname\n"
         "  port             TCP port (default 80)\n"
@@ -332,7 +333,7 @@ int main(int argc, char *argv[]) {
     family_t family = AF_UNSPEC;
     int show_help = 0;
     int show_version = 0;
-    int timeout = 3;     // seconds
+    int timeout = 3000;  // milliseconds
     int waittime = 1000; // milliseconds
     int count = INT_MAX;
     int opt;
@@ -359,13 +360,25 @@ int main(int argc, char *argv[]) {
             s_dbg = 1;
             break;
         case 't':
-            timeout = atoi(optarg);
+            timeout = atof(optarg) * 1000;
+            if (timeout <= 0) {
+                fprintf(stderr, "invalid timeout: %s\n", optarg);
+                return 1;
+            }
             break;
         case 'w':
             waittime = atoi(optarg);
+            if (waittime <= 0) {
+                fprintf(stderr, "invalid waittime: %s\n", optarg);
+                return 1;
+            }
             break;
         case 'c':
             count = atoi(optarg);
+            if (count <= 0) {
+                fprintf(stderr, "invalid count: %s\n", optarg);
+                return 1;
+            }
             break;
         default: // '?'
             usage(stderr);
@@ -386,12 +399,12 @@ int main(int argc, char *argv[]) {
     if (remaining < 1) {
         fprintf(stderr, "host is not specified\n");
         usage(stderr);
-        return -1;
+        return 1;
     }
     if (remaining > 2) {
         fprintf(stderr, "unknown arg: %s\n", argv[optind + 2]);
         usage(stderr);
-        return -1;
+        return 1;
     }
 
 #ifdef _WIN32
@@ -406,8 +419,12 @@ int main(int argc, char *argv[]) {
     const char *host = argv[optind];
     const char *port_str = (remaining == 2) ? argv[optind + 1] : "80";
     port_t port = atoi(port_str);
+    if (port <= 0) {
+        fprintf(stderr, "invalid port: %s\n", port_str);
+        return 1;
+    }
 
-    dbg("host: %s, port: %d, timeout: %d s, waittime: %d ms, count: %d", host,
+    dbg("host: %s, port: %d, timeout: %d ms, waittime: %d ms, count: %d", host,
         port, timeout, waittime, count);
 
     int seq = 0;
@@ -436,7 +453,7 @@ int main(int argc, char *argv[]) {
 
     const char *proto = addr->sa_family == AF_INET ? "TCP" : "TCP6";
 
-    while (!stop) {
+    while (!s_stop && seq < count) {
         double elapsed = ping_once(addr, timeout);
         seq++;
         if (elapsed >= 0) {
@@ -452,16 +469,16 @@ int main(int argc, char *argv[]) {
         } else {
             printf("%s %s %d: seq=%d %s\n", proto, ip, port, seq, errmsg);
         }
-        if (seq >= count)
-            break;
-        usleep(1000 * waittime);
+        if (seq < count)
+            usleep(1000 * waittime);
     }
 
     double sd = succ > 1 ? m2 / (succ - 1) : 0;
+    double loss = seq > 0 ? 100.0 * (seq - succ) / seq : 0;
 
     printf("\n--- %s %d %s statistics ---\n", host, port, proto);
     printf("%d packets transmitted, %d packets received, %.2f%% packet loss\n",
-           seq, succ, 100.0 * (seq - succ) / seq);
+           seq, succ, loss);
     if (succ > 0) {
         printf("round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f\n", min,
                mean, max, sd);
